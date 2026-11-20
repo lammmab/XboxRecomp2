@@ -239,9 +239,9 @@ mod tests {
         //         EB 0E           jmp 0x1010     ───────────────────┐     │
         //         EB 0B           jmp 0x100D     ─────────────┐     │     │
         //         C3              ret                         │     │     │
-        // 0x100D: B8 CC CC 90 90  mov eax, 0x9090CCCC     ◀───┘     │     │
-        // 0x1010: 90 90 C3        nop; nop; ret           ◀─────────┘     │
-        // 0x1020: C3              ret                     ◀───────────────┘
+        // 0x100D: B8 CC CC 90 90  mov eax, 0x9090CCCC    ◀───┘     │     │
+        // 0x1010: 90 90 C3        nop; nop; ret          ◀─────────┘     │
+        // 0x1020: C3              ret                    ◀───────────────┘
         // ```
         // The CC CC before 0x1010 suggests a new function.
         // We accept it, but only if the not already in existing function.

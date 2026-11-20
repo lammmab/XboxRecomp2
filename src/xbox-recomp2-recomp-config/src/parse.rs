@@ -55,6 +55,7 @@ struct FixesSection {
 #[serde(default, deny_unknown_fields)]
 struct AliasesSection {
     symbol_aliases: HashMap<String, String>,
+    hash_aliases: HashMap<String, String>,
 }
 
 /// The `[main]` section.
@@ -345,18 +346,33 @@ fn build(path: &str, raw: ConfigDocument) -> Result<LoadedConfig, ConfigError> {
             check_single_thread_locks: raw.speed_hacks.check_single_thread_locks,
         },
         symbol_aliases: raw.alias.symbol_aliases,
+        hash_aliases: raw.alias.hash_aliases,
         ..RecompilerConfig::default()
     };
 
-    let mut seen: HashMap<&str, &str> = HashMap::new(); // alias -> key
+    let mut seen_symbol_aliases: HashMap<&str, &str> = HashMap::new(); // alias -> key
     for (key, alias) in &config.symbol_aliases {
-        if let Some(prev) = seen.insert(alias.as_str(), key.as_str()) {
+        if let Some(prev) = seen_symbol_aliases.insert(alias.as_str(), key.as_str()) {
             // No two symbols can have the same emitted name.
             // Either we catch it here, or it becomes a compiler error later.
             return Err(ConfigError::Schema {
                 path: path.into(),
                 source: Box::new(toml::de::Error::custom(format!(
                     "alias.symbol_aliases: alias `{alias}` is used by both `{prev}` and `{key}`"
+                ))),
+            });
+        }
+    }
+
+    let mut seen_hash_aliases: HashMap<&str, &str> = HashMap::new(); // alias -> key
+    for (key, alias) in &config.hash_aliases {
+        if let Some(prev) = seen_hash_aliases.insert(alias.as_str(), key.as_str()) {
+            // No two hashes can have the same emitted name.
+            // Either we catch it here, or it becomes a compiler error later.
+            return Err(ConfigError::Schema {
+                path: path.into(),
+                source: Box::new(toml::de::Error::custom(format!(
+                    "alias.hash_aliases: alias `{alias}` is used by both `{prev}` and `{key}`"
                 ))),
             });
         }
@@ -611,14 +627,18 @@ mod tests {
         );
     }
 
-    /// Tests that no symbol aliases can have duplicated emitted names.
+    /// Tests that no symbol or hash aliases can have duplicated emitted names.
     #[test]
-    fn symbol_aliases_no_duplicates() {
+    fn aliases_no_duplicates() {
         let result = parse(indoc! {r#"
             [alias]
             symbol_aliases = {
                 sub_3D3240 = "D3D_CommonSetDebugRegisters",
                 sub_3D3241 = "D3D_CommonSetDebugRegisters"
+            }
+            hash_aliases = {
+                9f3c1a7be2d84a65c0b17e48d5a2f913 = "GetSnubbed",
+                1cb0e9df767beafe9a73ecc216b9f80a = "GetSnubbed"
             }
         "#});
 
@@ -627,9 +647,14 @@ mod tests {
         };
 
         let msg = err.to_string();
+        // Symbol
         assert!(msg.contains("D3D_CommonSetDebugRegisters"), "{msg}");
         assert!(msg.contains("sub_3D3240"), "{msg}");
         assert!(msg.contains("sub_3D3241"), "{msg}");
+        // Hash
+        assert!(msg.contains("GetSnubbed"), "{msg}");
+        assert!(msg.contains("9f3c1a7be2d84a65c0b17e48d5a2f913"), "{msg}");
+        assert!(msg.contains("1cb0e9df767beafe9a73ecc216b9f80a"), "{msg}");
     }
 
     /// Checks that `result` is a schema error and returns its message.

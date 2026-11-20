@@ -13,10 +13,12 @@ use crate::config::{AddressMap, FunctionAddress, FunctionSize, MidAsmHook, Recom
 use crate::decode::{DecodeBuffer, DecodeOutcome, Decoder, RangeDecoder};
 use crate::executable::Executable;
 use code_reader::CodeReader;
+use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 pub(in crate::analysis) use update::WalkUpdate;
 use xbox_recomp2_executable::GuestAddress32;
+use xxhash_rust::xxh3::xxh3_128;
 
 mod blocks;
 mod branches;
@@ -358,6 +360,60 @@ impl<'a> FunctionWalker<'a> {
         }
 
         Ok(instruction)
+    }
+
+    /// Hashes a function's bytes with per-link information discarded.
+    /// Whilst a per-link heuristic could be wrong (e.g. constant that equals a valid image address),
+    /// in practice that only loses a little bit of distinguishability.
+    ///
+    /// # Returns
+    /// `None` if the function has no instructions or the bytes couldn't be read.
+    ///
+    /// # Arguments
+    ///
+    /// - `node`: A walked function.
+    /// - `image_range`: Addresses that look like they point into the image.
+    pub fn masked_function_hash(
+        &mut self,
+        node: &FunctionNode,
+        image_range: Range<u32>,
+    ) -> Option<u128> {
+        let entry = node.entry.get();
+
+        // Get the furthest instruction end
+        let end = node.instructions.values().map(|i| i.end()).max()?;
+        let len = usize::try_from(end - u64::from(entry)).ok()?;
+
+        // Get the original bytes
+        let data = self.executable.find(u64::from(entry))?;
+        let mut masked = data.get(..len)?.to_vec();
+
+        for (&address, instruction) in &node.instructions {
+            let offset = (address.get() - entry) as usize;
+            let DecodeOutcome::Ok(insn) = self.buffer.decode_at(self.decoder, data, offset) else {
+                continue;
+            };
+            let next = address.get().wrapping_add(u32::from(instruction.length));
+
+            for field in insn.encoded_fields().into_iter().flatten() {
+                let target = if field.relative_to_next_insn {
+                    next.wrapping_add(field.value as u32)
+                } else {
+                    field.value as u32
+                };
+
+                let inside_function = field.relative_to_next_insn
+                    && u64::from(target) >= u64::from(entry)
+                    && u64::from(target) < end;
+
+                if !inside_function && image_range.contains(&target) {
+                    let start = offset + usize::from(field.offset);
+                    masked[start..start + usize::from(field.size)].fill(0);
+                }
+            }
+        }
+
+        Some(xxh3_128(&masked))
     }
 }
 

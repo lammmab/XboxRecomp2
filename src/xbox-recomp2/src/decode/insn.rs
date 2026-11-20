@@ -28,6 +28,19 @@ pub struct Insn {
     pub(super) operands: Box<[DecodedOperand]>,
 }
 
+/// A displacement or immediate field inside an encoded instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncodedField {
+    /// Byte offset from the start of current instruction.
+    pub offset: u8,
+    /// Size in bytes.
+    pub size: u8,
+    /// The value of the encoded field.
+    pub value: i64,
+    /// Whether or not relative to the address of the next instruction.
+    pub relative_to_next_insn: bool,
+}
+
 impl Insn {
     /// Returns the decoded instruction.
     #[inline]
@@ -61,6 +74,39 @@ impl Insn {
             DecodedOperandKind::Mem(mem) => Some(mem),
             _ => None,
         }
+    }
+
+    /// Immediate / displacement fields in the current encoding.
+    ///
+    /// Slots:
+    ///     0: Displacement
+    ///     1 & 2: Immediates
+    /// Missing fields are `None`.
+    pub fn encoded_fields(&self) -> [Option<EncodedField>; 3] {
+        let raw = &self.instruction.raw;
+        let mut out = [None; 3];
+
+        if raw.disp.size != 0 {
+            out[0] = Some(EncodedField {
+                offset: raw.disp.offset,
+                size: raw.disp.size / 8,
+                value: raw.disp.value,
+                relative_to_next_insn: false,
+            });
+        }
+
+        for (slot, imm) in out[1..].iter_mut().zip(raw.imm.iter()) {
+            if imm.size != 0 {
+                *slot = Some(EncodedField {
+                    offset: imm.offset,
+                    size: imm.size / 8,
+                    value: imm.value as i64,
+                    relative_to_next_insn: imm.is_relative,
+                });
+            }
+        }
+
+        out
     }
 }
 

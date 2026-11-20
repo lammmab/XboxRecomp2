@@ -98,6 +98,13 @@ pub struct RecompilerConfig {
     /// - `_xstart` -> `EntryPoint`
     pub symbol_aliases: HashMap<String, String>,
 
+    /// Mappings of `hashed bytes` -> `chosen name`.
+    /// Examples:
+    ///
+    /// - `9f3c1a7be2d84a65c0b17e48d5a2f913` -> `CoolFunc`
+    /// - `1cb0e9df767beafe9a73ecc216b9f80a` -> `StableMappingLol`
+    pub hash_aliases: HashMap<String, String>,
+
     // ── [fixes] ──────────────────────────────────────────────────────────────
     /// Guest functions to recompile: `address` -> `size` (`fixes.functions`).
     pub functions: AddressMap<FunctionSize>,
