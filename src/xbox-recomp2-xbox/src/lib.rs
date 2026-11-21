@@ -72,6 +72,6 @@ pub fn parse_executable(data: &[u8]) -> Executable {
 /// # Errors
 ///
 /// See [`xbox_recomp2::run_with`] for Error list.
-pub fn run(input: &Path, diag: &mut dyn Write) -> Result<(), RunError> {
-    xbox_recomp2::run_with(input, BUILTIN_FORMATS.as_slice(), &XBOX, diag)
+pub fn run(input: &Path, hash_funcs: Option<&[String]>, diag: &mut dyn Write) -> Result<(), RunError> {
+    xbox_recomp2::run_with(input, BUILTIN_FORMATS.as_slice(), &XBOX, diag, hash_funcs)
 }

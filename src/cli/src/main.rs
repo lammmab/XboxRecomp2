@@ -47,6 +47,15 @@ enum Command {
     Stats(StatsArgs),
 }
 
+fn parse_list(value: &str) -> Result<Vec<String>, String> {
+    Ok(value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect())
+}
+
 /// recompile from a config TOML
 #[derive(FromArgs)]
 #[argh(subcommand, name = "recompile")]
@@ -54,6 +63,10 @@ struct RecompileArgs {
     /// config TOML file
     #[argh(positional)]
     config: PathBuf,
+
+    /// function names to get hashes for, separated by commas
+    #[argh(option, from_str_fn(parse_list))]
+    funcs: Option<Vec<String>>,
 }
 
 /// report one run's statistics without writing files
@@ -78,9 +91,9 @@ fn main() {
 fn run(cli: &Cli) -> i32 {
     match &cli.command {
         Some(Command::Stats(args)) => stats_command(args),
-        Some(Command::Recompile(args)) => recompile(&args.config),
+        Some(Command::Recompile(args)) => recompile(&args.config, args.funcs.as_deref()),
         None => match &cli.config {
-            Some(config) => recompile(config),
+            Some(config) => recompile(config, None),
             None => {
                 print_help();
                 0
@@ -95,13 +108,13 @@ fn print_help() {
     }
 }
 
-fn recompile(input: &Path) -> i32 {
+fn recompile(input: &Path, hash_funcs: Option<&[String]>) -> i32 {
     if !is_regular_file(input) {
         return 0;
     }
 
     let mut stdout = BufWriter::new(io::stdout());
-    let result = run_pipeline(input, &mut stdout);
+    let result = run_pipeline(input, hash_funcs, &mut stdout);
     let _ = stdout.flush();
 
     match result {

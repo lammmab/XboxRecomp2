@@ -63,8 +63,14 @@ pub fn run_with(
     formats: &[&dyn executable::ExecutableFormat],
     platform: &dyn platform::GuestPlatform,
     diag: &mut dyn Write,
+    hash_funcs: Option<&[String]>
 ) -> Result<(), RunError> {
     let mut recompiler = Recompiler::load_input(input, formats, platform, diag)?;
     recompiler.analyse_requiring_functions(input, diag)?;
-    recompiler.recompile(diag).map_err(RunError::Out)
+    recompiler.recompile(diag).map_err(RunError::Out)?;
+
+    if let Some(names) = hash_funcs {
+        recompiler.print_function_hashes(names, diag);
+    }
+    Ok(())
 }

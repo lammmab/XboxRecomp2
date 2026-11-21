@@ -32,6 +32,9 @@ mod reader;
 mod switch_tables;
 mod walk;
 
+mod hash;
+pub(crate) use hash::masked_function_hash;
+
 /// Output of one discovery run over an executable.
 pub(crate) struct Discovery {
     pub functions: Vec<Function>,

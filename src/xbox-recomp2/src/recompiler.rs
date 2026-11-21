@@ -37,6 +37,9 @@ use thiserror::Error;
 use xbox_recomp2_executable::GuestAddress64;
 use zydis::Mnemonic;
 
+use crate::analysis::masked_function_hash;
+use crate::decode::DecodeBuffer;
+
 /// Printed when the input binary is missing or empty.
 const CONFIG_LOAD_FAILED_ERROR: &str = "Error: Failed to load config file.";
 /// Functions per generated `x86_recomp.N.cpp` file.
@@ -139,6 +142,13 @@ pub enum RunError {
         first: u64,
         /// Address of the second symbol with `name`.
         second: u64,
+    },
+
+    /// An `alias.hash_aliases` key isn't valid hex, or is listed twice with different names.
+    #[error("alias.hash_aliases: invalid or conflicting hash `{key}`")]
+    InvalidHashAlias {
+        /// The offending key.
+        key: Box<str>,
     },
 
     /// Writing the output files failed.
@@ -403,15 +413,28 @@ impl<'a> Recompiler<'a> {
             symbol.name = "_xstart".into();
         }
 
+        // Figure out which functions match a hash alias
+        let hash_renames = self.hash_alias_renames()?;
+
         // Apply the aliases.
         let aliases = &self.config.symbol_aliases;
-        if aliases.is_empty() {
-            return Ok(());
+        let mut manually_named: HashSet<u64> = HashSet::new();
+        if !aliases.is_empty() {
+            for symbol in self.executable.symbols.iter_mut() {
+                if let Some(alias) = aliases.get(&*symbol.name) {
+                    symbol.name = alias.as_str().into();
+                    manually_named.insert(symbol.address.get());
+                }
+            }
         }
 
-        for symbol in self.executable.symbols.iter_mut() {
-            if let Some(alias) = aliases.get(&*symbol.name) {
-                symbol.name = alias.as_str().into();
+        // Apply hash alises. Manual aliases take precedence here.
+        for (address, name) in hash_renames {
+            if manually_named.contains(&address.get()) {
+                continue;
+            }
+            if let Some(symbol) = self.executable.symbols.find_mut(address) {
+                symbol.name = name.as_str().into();
             }
         }
 
@@ -436,6 +459,113 @@ impl<'a> Recompiler<'a> {
         }
 
         Ok(())
+    }
+
+    /// Prints the masked hash of input functions.
+    ///
+    /// # Arguments
+    ///
+    /// - `names`: symbol names (after aliasing), e.g. `sub_1A510` or `_xstart`.
+    /// - `out`: receives one line per match.
+    pub fn print_function_hashes(&self, names: &[String], out: &mut dyn Write) {
+        let mut buffer = DecodeBuffer::new();
+        let mut found: HashSet<&str> = HashSet::new();
+
+        for function in &self.functions {
+            let Some(symbol) = self.executable.symbols.find(function.base) else { continue };
+            let Some(name) = names.iter().find(|n| n.as_str() == &*symbol.name) else { continue };
+
+            match self.function_hash(function, &mut buffer) {
+                Some(hash) => {
+                    let _ = writeln!(out, "{name} 0x{:X} {hash:032x}", function.base.get());
+                }
+                None => {
+                    let _ = writeln!(out, "{name}: could not hash (no readable bytes)");
+                }
+            }
+            found.insert(name);
+        }
+
+        for name in names {
+            if !found.contains(name.as_str()) {
+                let _ = writeln!(out, "{name}: no function with this name");
+            }
+        }
+    }
+
+    /// Hashes a function's original bytes, ignoring per-link fields.
+    ///
+    /// # Arguments
+    ///
+    /// - `function`: the function to hash.
+    /// - `buffer`: reusable decode storage.
+    ///
+    /// # Returns
+    ///
+    /// [`None`] if the function has no body or its bytes can't be read.
+    fn function_hash(&self, function: &Function, buffer: &mut DecodeBuffer) -> Option<u128> {
+        let body = self.bodies.get(&function.base)?;
+        let data = self.executable.find(function.base.get())?;
+        let base = self.executable.base.get() as u32;
+        let image_range = base..base.wrapping_add(self.executable.size_of_image as u32);
+        let addresses: Vec<u32> = body.starts().iter().map(|a| a.get()).collect();
+
+        masked_function_hash(
+            data,
+            function.base.get() as u32,
+            &addresses,
+            &image_range,
+            &self.analyse_decoder,
+            buffer,
+        )
+    }
+
+    /// Finds functions with a hash matching an `alias.hash_aliases` entry.
+    ///
+    /// # Returns
+    ///
+    /// The address and new name of each matching function.
+    ///
+    /// # Errors
+    ///
+    /// - [`RunError::InvalidHashAlias`]: a key isn't valid hex, or two keys
+    ///  have a duplicate hash.
+    fn hash_alias_renames(&self) -> Result<Vec<(GuestAddress64, String)>, RunError> {
+        if self.config.hash_aliases.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Hex string -> u128
+        let mut by_hash: HashMap<u128, &str> = HashMap::new();
+        for (key, name) in &self.config.hash_aliases {
+            let invalid = || RunError::InvalidHashAlias {
+                key: key.as_str().into(),
+            };
+
+            let hex = key.trim().trim_start_matches("0x");
+            let hash = u128::from_str_radix(hex, 16).map_err(|_| invalid())?;
+
+            if let Some(previous) = by_hash.insert(hash, name) {
+                if previous != name.as_str() {
+                    return Err(invalid());
+                }
+            }
+        }
+
+        let mut buffer = DecodeBuffer::new();
+        let mut renames = Vec::new();
+
+        for function in &self.functions {
+            let Some(hash) = self.function_hash(function, &mut buffer) else {
+                continue;
+            };
+
+            if let Some(name) = by_hash.get(&hash) {
+                renames.push((function.base, (*name).to_string()));
+            }
+        }
+
+        Ok(renames)
     }
 
     /// Generates C++ for the analysed functions and writes it to disk:
